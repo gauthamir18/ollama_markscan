@@ -25,6 +25,8 @@ class Mark(Base):
     total_marks = Column(Float, nullable=True)
 
     seal_image_url = Column(String, nullable=True)
+    drive_file_id = Column(String, nullable=True)
+    drive_web_link = Column(String, nullable=True)
 
     status = Column(
         String,

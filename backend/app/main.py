@@ -73,6 +73,14 @@ def auto_bootstrap_database():
     except Exception as e:
         print(f"Schema check error: {e}")
 
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE marks ADD COLUMN IF NOT EXISTS drive_file_id VARCHAR;"))
+            conn.execute(text("ALTER TABLE marks ADD COLUMN IF NOT EXISTS drive_web_link VARCHAR;"))
+            conn.commit()
+    except Exception as e:
+        print(f"Drive columns migration note: {e}")
+
     db = SessionLocal()
     try:
         admin = db.query(Faculty).filter((Faculty.role.ilike("admin")) | (Faculty.email == "admin@markscan.edu")).first()

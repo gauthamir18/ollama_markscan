@@ -17,6 +17,7 @@ from app.services.field_cropper import crop_fields
 from app.services.ocr import read_field, read_name_candidates
 from app.services.student_matcher import find_best_student_match
 from app.services.hybrid_engine import decide_hybrid
+from app.services.google_drive import is_drive_configured, upload_file_to_drive
 
 router = APIRouter(
     prefix="/upload",
@@ -189,15 +190,40 @@ def upload_image(
     # Detect and crop seal
     seal_info = detect_seal(str(file_path))
 
+    processed_path = None
     if not seal_info["detected"]:
         processed_path = process_image(str(file_path))
         seal_info = detect_seal(processed_path, crop_source_path=str(file_path))
+
+    # Clean up temporary preprocessed image if it was created
+    if processed_path:
+        try:
+            Path(processed_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # If Google Drive is configured, upload original image to Drive & delete local copy
+    drive_upload_res = None
+    if is_drive_configured():
+        try:
+            drive_upload_res = upload_file_to_drive(
+                file_path=file_path,
+                filename=unique_filename,
+                delete_local=True
+            )
+        except Exception as drive_err:
+            print(f"⚠️ Google Drive upload error: {drive_err}")
 
     if not seal_info["detected"]:
         return {
             "status": "no_seal_detected",
             "filename": unique_filename,
             "message": "No seal was detected in the uploaded image.",
+            "google_drive": {
+                "uploaded": drive_upload_res is not None,
+                "file_id": drive_upload_res.get("id") if drive_upload_res else None,
+                "web_link": drive_upload_res.get("webViewLink") if drive_upload_res else None,
+            },
         }
 
     seal_crop_path = seal_info["crop_path"]
@@ -225,10 +251,10 @@ def upload_image(
         print(f"Candidate query error: {e}")
     candidates = [{"id": s.id, "name": s.name, "roll_no": s.roll_no} for s in candidate_records]
 
-    # 3. Vision AI First: Extract details + detect orientation (zero server RAM)
-    from app.services.gemini_reader import analyze_seal_vision, get_genai_client
+    # 3. Vision AI: Extract details + detect orientation using Qwen / Vision model
+    from app.services.vision_service import analyze_seal_vision, is_vision_available
     vision_res = None
-    if get_genai_client() is not None:
+    if is_vision_available():
         try:
             vision_res = analyze_seal_vision(
                 seal_image_path=seal_crop_path,
@@ -269,7 +295,7 @@ def upload_image(
 
     if vision_res is not None:
         vision_ai_used = True
-        vision_model = vision_res.get("model_used", "gemini-3.1-flash-lite")
+        vision_model = vision_res.get("model_used", "qwen2.5vl:3b")
         vision_reasoning = vision_res.get("reasoning", "")
         raw_ocr_name = vision_res.get("student_name", "").strip()
         final_obtained = vision_res.get("marks_obtained")
@@ -325,6 +351,9 @@ def upload_image(
     final_test_code = effective_test_code
 
     # 5. Save safely to fake_marks table (leaving real marks table intact)
+    drive_file_id = drive_upload_res.get("id") if drive_upload_res else None
+    drive_web_link = drive_upload_res.get("webViewLink") if drive_upload_res else None
+
     try:
         fake_entry = Mark(
             student_id=final_student.id if final_student else None,
@@ -336,6 +365,8 @@ def upload_image(
             marks_obtained=final_obtained,
             total_marks=final_total,
             seal_image_url="/" + seal_info["crop_path"],
+            drive_file_id=drive_file_id,
+            drive_web_link=drive_web_link,
             status="SCANNED"
         )
         db.add(fake_entry)
@@ -403,6 +434,11 @@ def upload_image(
             "marks": final_marks_str,
             "total": final_total_str,
             "vision_ai_used": vision_ai_used,
+        },
+        "google_drive": {
+            "uploaded": drive_upload_res is not None,
+            "file_id": drive_file_id,
+            "web_link": drive_web_link,
         },
     }
 
