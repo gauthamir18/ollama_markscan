@@ -331,116 +331,123 @@ def upload_image(
             pass
 
     # If obtained marks still not parsed, run parse_marks
+        
+    marks_parsed = {}
+
     if final_obtained is None and marks_raw:
-        marks_parsed = parse_marks(marks_raw, test_code=effective_test_code, default_max=final_total)
+        marks_parsed = parse_marks(
+            marks_raw,
+            test_code=effective_test_code,
+            default_max=final_total,
+        )
         final_obtained = marks_parsed.get("obtained")
+
         if final_total is None:
             final_total = marks_parsed.get("total")
-
-    # Match student in DB using RapidFuzz
-    local_student, local_conf, local_display_name, top_candidates = find_best_student_match(
-        raw_ocr_name,
-        db,
-        selected_class=selected_class,
-        selected_board=board,
-    )
-    final_student = local_student
-    final_display_name = local_display_name or raw_ocr_name
-    final_confidence = min(100.0, max(0.0, local_conf if not vision_ai_used else max(local_conf, vision_res.get("confidence", 0.95) * 100.0)))
-    final_needs_verification = (final_confidence < 75.0 or final_student is None)
-    final_test_code = effective_test_code
-
-    # 5. Save safely to fake_marks table (leaving real marks table intact)
-    drive_file_id = drive_upload_res.get("id") if drive_upload_res else None
-    drive_web_link = drive_upload_res.get("webViewLink") if drive_upload_res else None
-
-    try:
-        fake_entry = Mark(
-            student_id=final_student.id if final_student else None,
-            raw_ocr_name=raw_ocr_name,
-            matched_name=final_display_name,
-            match_confidence=final_confidence,
-            test_code=final_test_code,
-            raw_ocr_marks=marks_raw,
-            marks_obtained=final_obtained,
-            total_marks=final_total,
-            seal_image_url="/" + seal_info["crop_path"],
-            drive_file_id=drive_file_id,
-            drive_web_link=drive_web_link,
-            status="SCANNED"
+        # Match student in DB using RapidFuzz
+        local_student, local_conf, local_display_name, top_candidates = find_best_student_match(
+            raw_ocr_name,
+            db,
+            selected_class=selected_class,
+            selected_board=board,
         )
-        db.add(fake_entry)
-        db.commit()
-        db.refresh(fake_entry)
-    except Exception as e:
-        print(f"Failed to record in fake_marks: {e}")
-        db.rollback()
+        final_student = local_student
+        final_display_name = local_display_name or raw_ocr_name
+        final_confidence = min(100.0, max(0.0, local_conf if not vision_ai_used else max(local_conf, vision_res.get("confidence", 0.95) * 100.0)))
+        final_needs_verification = (final_confidence < 75.0 or final_student is None)
+        final_test_code = effective_test_code
 
-    final_marks_str = str(final_obtained) if final_obtained is not None else marks_parsed.get("cleaned") or marks_raw
-    final_total_str = str(final_total) if final_total is not None else None
+        # 5. Save safely to fake_marks table (leaving real marks table intact)
+        drive_file_id = drive_upload_res.get("id") if drive_upload_res else None
+        drive_web_link = drive_upload_res.get("webViewLink") if drive_upload_res else None
 
-    return {
-        "status": "success",
-        "filename": unique_filename,
-        "seal": {
-            "detected": seal_info["detected"],
-            "confidence": seal_info["confidence"],
-            "box": seal_info["box"],
-            "crop_path": seal_info["crop_path"],
-            "crop_url": "/" + seal_info["crop_path"],
-        },
-        "student_name": final_display_name,
-        "raw_ocr_name": raw_ocr_name,
-        "match_confidence": final_confidence,
-        "needs_verification": final_needs_verification,
-        "top_candidates": top_candidates,
-        "matched_student_id": final_student.id if final_student else None,
-        "mark_id": fake_entry.id if (fake_entry and getattr(fake_entry, "id", None)) else None,
-        "test_code": final_test_code,
-        "marks": final_marks_str,
-        "total": final_total_str,
-        "vision_ai_used": vision_ai_used,
-        "vision_model": vision_model,
-        "vision_reasoning": vision_reasoning,
-        "fields": {
-            "name": {
-                "text": final_display_name,
-                "raw_ocr": raw_ocr_name,
-                "confidence": final_confidence,
-                "needs_verification": final_needs_verification,
-                "top_candidates": top_candidates,
-                "crop_path": name_crop,
-                "crop_url": "/" + name_crop if name_crop else None,
+        try:
+            fake_entry = Mark(
+                student_id=final_student.id if final_student else None,
+                raw_ocr_name=raw_ocr_name,
+                matched_name=final_display_name,
+                match_confidence=final_confidence,
+                test_code=final_test_code,
+                raw_ocr_marks=marks_raw,
+                marks_obtained=final_obtained,
+                total_marks=final_total,
+                seal_image_url="/" + seal_info["crop_path"],
+                drive_file_id=drive_file_id,
+                drive_web_link=drive_web_link,
+                status="SCANNED"
+            )
+            db.add(fake_entry)
+            db.commit()
+            db.refresh(fake_entry)
+        except Exception as e:
+            print(f"Failed to record in fake_marks: {e}")
+            db.rollback()
+
+        final_marks_str = str(final_obtained) if final_obtained is not None else marks_parsed.get("cleaned") or marks_raw
+        final_total_str = str(final_total) if final_total is not None else None
+
+        return {
+            "status": "success",
+            "filename": unique_filename,
+            "seal": {
+                "detected": seal_info["detected"],
+                "confidence": seal_info["confidence"],
+                "box": seal_info["box"],
+                "crop_path": seal_info["crop_path"],
+                "crop_url": "/" + seal_info["crop_path"],
             },
-            "marks": {
-                "text": marks_raw,
-                "parsed": {
-                    "raw": marks_raw,
-                    "obtained": final_obtained,
-                    "total": final_total,
-                    "cleaned": final_marks_str,
-                },
-                "crop_path": marks_crop,
-                "crop_url": "/" + marks_crop if marks_crop else None,
-            },
-        },
-        "extracted_data": {
             "student_name": final_display_name,
             "raw_ocr_name": raw_ocr_name,
             "match_confidence": final_confidence,
             "needs_verification": final_needs_verification,
             "top_candidates": top_candidates,
+            "matched_student_id": final_student.id if final_student else None,
+            "mark_id": fake_entry.id if (fake_entry and getattr(fake_entry, "id", None)) else None,
             "test_code": final_test_code,
             "marks": final_marks_str,
             "total": final_total_str,
             "vision_ai_used": vision_ai_used,
-        },
-        "google_drive": {
-            "uploaded": drive_upload_res is not None,
-            "file_id": drive_file_id,
-            "web_link": drive_web_link,
-        },
-    }
+            "vision_model": vision_model,
+            "vision_reasoning": vision_reasoning,
+            "fields": {
+                "name": {
+                    "text": final_display_name,
+                    "raw_ocr": raw_ocr_name,
+                    "confidence": final_confidence,
+                    "needs_verification": final_needs_verification,
+                    "top_candidates": top_candidates,
+                    "crop_path": name_crop,
+                    "crop_url": "/" + name_crop if name_crop else None,
+                },
+                "marks": {
+                    "text": marks_raw,
+                    "parsed": {
+                        "raw": marks_raw,
+                        "obtained": final_obtained,
+                        "total": final_total,
+                        "cleaned": final_marks_str,
+                    },
+                    "crop_path": marks_crop,
+                    "crop_url": "/" + marks_crop if marks_crop else None,
+                },
+            },
+            "extracted_data": {
+                "student_name": final_display_name,
+                "raw_ocr_name": raw_ocr_name,
+                "match_confidence": final_confidence,
+                "needs_verification": final_needs_verification,
+                "top_candidates": top_candidates,
+                "test_code": final_test_code,
+                "marks": final_marks_str,
+                "total": final_total_str,
+                "vision_ai_used": vision_ai_used,
+            },
+            "google_drive": {
+                "uploaded": drive_upload_res is not None,
+                "file_id": drive_file_id,
+                "web_link": drive_web_link,
+            },
+        }
 
 
 @router.post("/confirm")
